@@ -5,6 +5,12 @@
 Nginx -> high performance software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> those are configurable<br>
 Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides client IP vs acts on behalf of the server, eg. reverse proxy with load balancing, caching etc.<br>
 
+## Solution - 1), 2), 4)
+
+### 1)
+
+
+## Solution - 3
 # High level questions to answer
 
 Why did we choose to solve it this way?<br>
