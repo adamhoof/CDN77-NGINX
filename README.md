@@ -4,13 +4,13 @@
 
 NGINX -> high performance, opensource software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE<br>
 Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides client IP vs acts on behalf of the server, eg. reverse proxy with load balancing, caching etc. <br>
-**Configuration** <br>
+#### Configuration
 - Defined in a nginx.conf
 - Scopes/Context: by default everything is in a "main" scope/context, where all general settings are configured. We put other scopes and directives/commands inside.
 - Directives/Commands: basically specific settings with arguments, eg. how many connections per worker can we have, http routing config, cache, ...
 - This approach of scopes and commands seems to provide a really good configuration granularity.
 
-**Development guide most important parts** <br>
+#### Development guide most important parts
 - Architecture goes like this: Small core + pluggable modules. 
 - Uses its own memory allocation method
   - Allocate larger chunk (pool) of memory first.
@@ -42,13 +42,14 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 2. Code exploration
     - ngx_http_proxy_module.c looks legit, search cache keyword, found ngx_http_proxy_cache_key function.
     - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into internal complex compiled value.
-    - We gotta go back and dig a little bit more into how nginx works under the hood in general. (added to [Research -> Development guide most important parts](#research) 
+    - We gotta go back and dig a little bit more into how nginx works under the hood in general. (added to [Development guide most important parts](#development-guide-most-important-parts) 
       - So from what we know, core concepts are scopes and commands. How do they map into code?
         - The scope hierarchy of scopes is important. We will probably care the most about http. If we used http in conf, then the code allocates structs ngx_http_<module_name>_main_conf_t.
         - Inside the http, we can define other scopes like server. Again if we did that, the code allocates ngx_http_<module_name>_srv_conf_t.
 
 ## 2) - NGINX X-Cache-Key header addition
-## 3) - Bonus Lua module API extension
+## 3) - DNS wildcard algorithm
+## 4) - Bonus Lua module API extension
 
 # High level questions to answer
 
