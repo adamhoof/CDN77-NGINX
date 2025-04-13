@@ -20,7 +20,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 - Directives/commands in code are represented using _ngx_command_t_, specifying name, args, allowed contexts, handler function of a single directive.
   - Allowed contexts examples (where does the parser accept specific directives/commands): NGX_MAIN_CONF (top level), NGX_HTTP_MAIN_CONF (http block), NXG_HTTP_SRV_CONF (http -> server block)
 - Internal configuration structure in code by subsystem, module and scope
-  - Generic: ngx_<subsystem>_<module>_<scope>_conf_t
+  - Generic: `ngx_<subsystem>_<module>_<scope>_conf_t`
     - subsystem -> major configuration context/scope (http{}, stream{})
     - module -> functional module providing directives/commands within the subsystem (core{}, proxy{}, ssl{})
     - scope -> configuration context/scope within the subsystem
@@ -28,8 +28,8 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
       - srv -> inside server{} (http{server{ **->here<-** }})
       - ...
     - Examples:
-  - ngx_http_<module>_main_conf_t: stores settings for <module> directives defined directly inside the http { **->here<-** } block
-  - ngx_http_<module>_srv_conf_t: stores settings for <module> directives defined inside http { server { **->here<-** } } block
+  - ngx_http_<module>_main_conf_t: stores settings for `<module>` directives defined directly inside the http { **->here<-** } block
+  - ngx_http_<module>_srv_conf_t: stores settings for `<module>` directives defined inside http { server { **->here<-** } } block
   - ngx_http_proxy_srv_conf_t: stores settings for proxy directives defined inside http { server { **->here<-**} } block
 
 ## 1) - NGINX cache lookup key analysis
