@@ -2,7 +2,7 @@
 
 ## Research
 
-NGINX -> high performance, opensource software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> those are configurable<br>
+NGINX -> high performance, opensource software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE<br>
 Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides client IP vs acts on behalf of the server, eg. reverse proxy with load balancing, caching etc. <br>
 **Configuration** <br>
 - Defined in a nginx.conf
@@ -17,9 +17,20 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
   - Use ngx_palloc(pool, size) to request memory from this pre-allocated space. SPEED!
   - The deletion is also "automated", since the pool has the ownership over the memory! 
 - Has its own data types -> ngx_str_t, ngx_uint_t, uintptr_t, ngx_array_t, ngx_list_t... cool!
-- Directives/commands are defined using ngx_command_t, specifying name, args, allowed contexts, handler function of a single directive.
-  - Allowed contexts examples: NGX_MAIN_CONF (top level), NGX_HTTP_MAIN_CONF (http block), NXG_HTTP_SRV_CONF (http -> server block)
-- Contexts in code are represented like this ie. ngx_http_<module>_main_conf_t ("top level" of http), ngx_http_<module>_srv_conf_t (http -> server), ngx_http_proxy_srv_conf_t (http -> server inside proxy module)
+- Directives/commands in code are represented using _ngx_command_t_, specifying name, args, allowed contexts, handler function of a single directive.
+  - Allowed contexts examples (where does the parser accept specific directives/commands): NGX_MAIN_CONF (top level), NGX_HTTP_MAIN_CONF (http block), NXG_HTTP_SRV_CONF (http -> server block)
+- Internal configuration structure in code by subsystem, module and scope
+  - Generic: ngx_<subsystem>_<module>_<scope>_conf_t
+    - subsystem -> major configuration context/scope (http{}, stream{})
+    - module -> functional module providing directives/commands within the subsystem (core{}, proxy{}, ssl{})
+    - scope -> configuration context/scope within the subsystem
+      - main -> top level of the subsystem (http{ **->here<-** }, NOT to be confused with the top level "main" context ("main" { **->!here<-** ... http{} ...})
+      - srv -> inside server{} (http{server{ **->here<-** }})
+      - ...
+    - Examples:
+  - ngx_http_<module>_main_conf_t: stores settings for <module> directives defined directly inside the http { **->here<-** } block
+  - ngx_http_<module>_srv_conf_t: stores settings for <module> directives defined inside http { server { **->here<-** } } block
+  - ngx_http_proxy_srv_conf_t: stores settings for proxy directives defined inside http { server { **->here<-**} } block
 
 ## 1) - NGINX cache lookup key analysis
 
@@ -31,7 +42,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 2. Code exploration
     - ngx_http_proxy_module.c looks legit, search cache keyword, found ngx_http_proxy_cache_key function.
     - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into internal complex compiled value.
-    - We gotta go back and dig a little bit more into how nginx works under the hood in general. (jump into [Research -> Development guide most important parts](#research) 
+    - We gotta go back and dig a little bit more into how nginx works under the hood in general. (added to [Research -> Development guide most important parts](#research) 
       - So from what we know, core concepts are scopes and commands. How do they map into code?
         - The scope hierarchy of scopes is important. We will probably care the most about http. If we used http in conf, then the code allocates structs ngx_http_<module_name>_main_conf_t.
         - Inside the http, we can define other scopes like server. Again if we did that, the code allocates ngx_http_<module_name>_srv_conf_t.
