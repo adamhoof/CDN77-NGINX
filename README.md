@@ -1,5 +1,13 @@
 # NGINX task
 
+**Contents** <br>
+[Research](#research) <br>
+[1) - NGINX cache lookup key analysis](#1---nginx-cache-lookup-key-analysis) <br>
+[2) - NGINX X-Cache-Key header addition](#2---nginx-x-cache-key-header-addition) <br>
+[3) - DNS wildcard algorithm](#3---dns-wildcard-algorithm) <br>
+[4) - Bonus Lua module API extension](#4---bonus-lua-module-api-extension) <br>
+[Approximate time requirements](#approximate-time-requirements) <br>
+
 ## Research
 
 NGINX -> high performance, opensource software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE<br>
@@ -90,17 +98,17 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
           - How it is done is nicely seen on this line here `ngx_memcpy((u_char *) &node_key, key, sizeof(ngx_rbtree_key_t));`
             - `ngx_rbtree_key_t` is `ngx_uint_t` => we are copying first `sizeof(ngx_uint_t)`bytes of the looked up key into the `node_key`. 
             - Now we can compare integer value of those bytes which is fast af! -> `if (node_key < node->key) { node = node->left; continue; }`
-        - This is beyond the question scope, but the rbtree is in the shared memory region, which is stored in a RAM => not persistent. This would mean the cache metadata is lost after nginx reboots!
+        - This is beyond the question scope, but the rbtree is in the shared memory area, which is stored in a RAM => not persistent. This would mean the cache metadata is lost after nginx reboots!
           - Did a little research and turns out that the rbtree is re-built upon start by scanning the cache directory (here is where the actual cache responses are placed). As we found earlier in Q3 answer, the filenames are the key, that is pretty helpful!
           - Also, remember our boi internal nginx cache metadata header space allocation from Question 1 + 2 -> cache_create_key -> point d.? That is where the metadata are placed persistently, and from where we can extract them, since the header is a part of the file itself!
         - Haha I can't stop digging into this, but it would seem like the `ngx_http_cache_t` also holds the key as we can see [here](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_cache.h#L65)
           - If we look into [ngx_http_file_cache_new](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L176), the `ngx_http_cache_t` is allocated from requests pool `c = ngx_pcalloc(r->pool, sizeof(ngx_http_cache_t));`, so when request is processed POOF, GONE => TEMPORARY storage where we happen to put the key for some accessibility reasons, probably.
             - An example flow goes like this: [finalize_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L2523C1-L2523C26) -> [terminate_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L2710) -> [close_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3726) -> [free_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3759) -> [r->pool gets freed](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3849)
           - But if we look back into [ngx_http_file_cache_add](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L2273), we allocate from the cache shared pool `fcn = ngx_slab_calloc_locked(cache->shpool,sizeof(ngx_http_file_cache_node_t));` => PERSISTENT (during runtime)
-            - This shared memory has a completely different lifecycle as we can see here, it gets allocated when the file cache is [initialized](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L83), I bet it does not get destroyed very soon.
+            - This shared memory area has a completely different lifecycle as we can see here, it gets allocated when the file cache is [initialized](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L83), I bet it does not get destroyed very soon.
     - **QUESTION 5: Jaká je jeho lokace z hlediska paměťového umístění (jak na něj nahlíží OS)**
       - The previous questions have already answered this, let's recap:
-        - The key is stored in RAM in a shared memory region for active lookups. OS sees this as 16 bytes.
+        - The key is stored in RAM in a shared memory area for active lookups. OS sees it as 16 bytes.
         - The key is stored on a disk for persistence. OS sees this as part of a filename string, which is fs metadata used to locate corresponding file data blocks on the disk.
           - NOTE: Everything is really just bytes in the end, but I think this illustrates the point better role-wise.
 
@@ -108,15 +116,10 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
 
-# High level questions to answer
-
-Why did we choose to solve it this way?<br>
-What did we get stuck at, how did we overcome it? How could it be solved differently? -> Started with almost no knowledge of some terms, learnt it <br>
-How would the solution scale?<br>
-Performance, code maintainability, security...<br>
-What parts of the solution are optimal, which are not?<br>
-What could be improved and why not improve it straight up?<br>
-How long did the task take? (research, implementation, debug)<br>
-How did we think about the task?<br>
-What did we come up with and what did we threw away?<br>
-What would we do if it went to production? -> Proper testing has already taken place on a pre-prod environemnt<br>
+## Approximate time requirements:
+**Research** (topics, terms, docs): 4h <br>
+**1) - NGINX cache lookup key analysis**(pure analysis, code digging...): 8h <br>
+**2) - NGINX X-Cache-Key header addition**<br>
+**3) - DNS wildcard algorithm**<br>
+**4) - Bonus Lua module API extension**<br>
+**Documentation** (thought process capture, ideas, research): 10h <br>
