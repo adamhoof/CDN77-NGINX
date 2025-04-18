@@ -37,11 +37,11 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 ### Thought process (literary):
 
 1. Figure out where to even look in the docs, the task is about cache, let's search cache.
-    - Ok there is a couple of cache related things, we are specifically interested in how cache key works in there, so perhaps proxy_cache_key link might be correct.
+    - Ok there are a couple of cache-related things, we are specifically interested in how cache key works in there, so perhaps proxy_cache_key link might be correct.
     - So this is only an overview of how to configure things -> nginx is opensource, look into the code.
 2. Code exploration
     - ngx_http_proxy_module.c looks legit, search cache keyword, found ngx_http_proxy_cache_key function.
-    - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into internal complex compiled value. from future --> this is responsible for creating the **parsed** "key template" from proxy_cache_key directive for later use (request comes, evaluate out it's variables based on this "key template", build the final keys string, which is then hashed) <-- from future
+    - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into an internal complex compiled value. from future --> this is responsible for creating the **parsed** "key template" from proxy_cache_key directive for later use (request comes, evaluate out it's variables based on this "key template", build the final keys string, which is then hashed) <-- from future
       - We gotta go back and dig a little bit more into how nginx works under the hood in general before proceeding. (added to [Development guide most important parts](#development-guide-most-important-parts)) <br>
     - **QUESTIONS 1 + 2: Podle jakého klíče nginx v cache vyhledává + jak se tento klíč vypočítává?** <br>
       - What can the cache even look for? -> Generally speaking some response from server, in this case HTTP response.
@@ -88,8 +88,16 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
             - Issue: But this would not ensure the key is EXACTLY the one we are looking for (though most of the time probably would be), since only the first part is checked
             - Fix: Here is where the second "if match" check comes in. It checks the `ngx_http_file_cache_node_t->key` (REST of the key) and if it matches, return node pointer, if not, continue traversing the rbtree, repeat, done!
           - How it is done is nicely seen on this line here `ngx_memcpy((u_char *) &node_key, key, sizeof(ngx_rbtree_key_t));`
-            - `ngx_rbtree_key_t` is `ngx_uint_t` => we are copying first `ngx_uint_t`*bytes of the looked up key into the `node_key`. 
+            - `ngx_rbtree_key_t` is `ngx_uint_t` => we are copying first `sizeof(ngx_uint_t)`bytes of the looked up key into the `node_key`. 
             - Now we can compare integer value of those bytes which is fast af! -> `if (node_key < node->key) { node = node->left; continue; }`
+        - This is beyond the question scope, but the rbtree is in the shared memory region, which is stored in a RAM => not persistent. This would mean the cache metadata is lost after nginx reboots!
+          - Did a little research and turns out that the rbtree is re-built upon start by scanning the cache directory (here is where the actual cache responses are placed). As we found earlier in Q3 answer, the filenames are the key, that is pretty helpful!
+          - Also, remember our boi internal nginx cache metadata header space allocation from Question 1 + 2 -> cache_create_key -> point d.? That is where the metadata are placed persistently, and from where we can extract them, since the header is a part of the file itself!
+        - Haha I can't stop digging into this, but it would seem like the `ngx_http_cache_t` also holds the key as we can see [here](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_cache.h#L65)
+          - If we look into [ngx_http_file_cache_new](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L176), the `ngx_http_cache_t` is allocated from requests pool `c = ngx_pcalloc(r->pool, sizeof(ngx_http_cache_t));`, so when request is processed POOF, GONE => TEMPORARY storage where we happen to put the key for some accessibility reasons, probably.
+            - An example flow goes like this: [finalize_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L2523C1-L2523C26) -> [terminate_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L2710) -> [close_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3726) -> [free_request](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3759) -> [here it gets freed](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_request.c#L3849)
+          - But if we look back into [ngx_http_file_cache_add](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L2273), we allocate from the cache shared pool `fcn = ngx_slab_calloc_locked(cache->shpool,sizeof(ngx_http_file_cache_node_t));` => PERSISTENT (during runtime)
+            - This shared memory has a completely different lifecycle as we can see here, it gets allocated when the file cache is [initialized](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L83), I bet it does not get destroyed very soon.
       - **QUESTION 5: Jaká je jeho lokace z hlediska paměťového umístění (dle OS)**
 
 ## 2) - NGINX X-Cache-Key header addition
