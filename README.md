@@ -10,11 +10,11 @@
 
 ## Research
 
-NGINX -> high performance, opensource software efficient under heavy load, event driven arch, can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE<br>
+NGINX -> high performance, opensource software which can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE. Can handle heavy load, event driven arch. <br>
 Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides client IP vs acts on behalf of the server, eg. reverse proxy with load balancing, caching etc. <br>
 #### Configuration
 - Defined in a nginx.conf
-- Scopes/Context: by default everything is in a "main" scope/context, where all general settings are configured. We put other scopes and directives/commands inside.
+- Scopes/Context: by default everything is in a "main" scope/context, where all general settings are configured. We put other scopes/contexts and directives/commands inside.
 - Directives/Commands: basically specific settings with arguments, eg. how many connections per worker can we have, http routing config, cache, ...
 - This approach of scopes and commands seems to provide a really good configuration granularity.
 
@@ -49,14 +49,14 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
     - So this is only an overview of how to configure things -> nginx is opensource, look into the code.
 2. Code exploration
     - ngx_http_proxy_module.c looks legit, search cache keyword, found ngx_http_proxy_cache_key function.
-    - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into an internal complex compiled value. from future --> this is responsible for creating the **parsed** "key template" from proxy_cache_key directive for later use (request comes, evaluate out it's variables based on this "key template", build the final keys string, which is then hashed) <-- from future
-      - We gotta go back and dig a little bit more into how nginx works under the hood in general before proceeding. (added to [Development guide most important parts](#development-guide-most-important-parts)) <br>
+      - A bunch of mumbo jumbo here, looks like the function takes in some config and parses it into an internal complex compiled value. from future --> this is responsible for creating the **parsed** "key template" from proxy_cache_key directive for later use (request comes, evaluate out it's variables based on this "key template", build the final keys string, which is then hashed) <-- from future
+      - **To make sense of this all, we gotta go back and dig a little bit more into how nginx works under the hood in general before proceeding.** (added to [Development guide most important parts](#development-guide-most-important-parts)) <br>
     - **QUESTIONS 1 + 2: Podle jakého klíče nginx v cache vyhledává + jak se tento klíč vypočítává?** <br>
       - What can the cache even look for? -> Generally speaking some response from server, in this case HTTP response.
       - Issue: Storing big responses in RAM would not be ideal, deplete memory pretty fast. Storing it on a disk and looking up there would be slow.
       - Solution:
         - Responses must go on a disk to not deplete RAM. For fast lookups, we will store the key (or more metadata) in a RAM.
-        - Because of those facts, we will need to search some interaction between the cache and filesystem (everything is a file, said Tux), since the response will be stored on a disk and we need to calculate a key representing the presence of this response.
+        - => We will need to search some interaction between the cache and filesystem (everything is a file, said Tux), since the response will be stored on a disk and we need to calculate a key representing the presence of this response.
       - Found `ngx_http_file_cache.c` file -> [ngx_http_file_cache_create_key](https://github.com/nginx/nginx/blob/b6e7eb0f5792d7a52d2675ee3906e502d63c48e3/src/http/ngx_http_file_cache.c#L228)
         1. Here we can see that `ngx_http_cache_t*` is stored in the request `c = r->cache;`, which holds cache related information for this specific request (ie. GET /image.png).
         2. The crc32 and md5 are initialized for checksum (error detection) and hashing purposes `ngx_crc32_init(c->crc32);` `ngx_md5_init(&md5);`
@@ -107,17 +107,49 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
           - But if we look back into [ngx_http_file_cache_add](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L2273), we allocate from the cache shared pool `fcn = ngx_slab_calloc_locked(cache->shpool,sizeof(ngx_http_file_cache_node_t));` => PERSISTENT (during runtime)
             - This shared memory area has a completely different lifecycle as we can see here, it gets allocated when the file cache is [initialized](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L83), I bet it does not get destroyed very soon.
     - **QUESTION 5: Jaká je jeho lokace z hlediska paměťového umístění (jak na něj nahlíží OS)**
-      - The previous questions have already answered this, let's recap:
-        - The key is stored in RAM in a shared memory area for active lookups. OS sees it as 16 bytes.
+      - Let's recap what previous answers told us:
+        - The key is stored in RAM in a shared memory area for active lookups. OS sees it as 16 bytes. 
         - The key is stored on a disk for persistence. OS sees this as part of a filename string, which is fs metadata used to locate corresponding file data blocks on the disk.
-          - NOTE: Everything is really just bytes in the end, but I think this illustrates the point better role-wise.
+            - NOTE: Everything is really just bytes in the end, but I think this illustrates the point better role-wise.
 
 ## 2) - NGINX X-Cache-Key header addition
+### Thought process (literary):
+1. First let's consider the constraints
+   - The X-Cache-Key must be the calculated key from 1), Questions 1 + 2.
+     - After we even figure out where to start, this should not be super hard - we already know where and how it is calculated, can borrow the function if needed. 
+   - The header must be sent to the client (in a response to the previous request), not to the origin.
+     - This is a little confusing, A lot of questions arise. 
+       - What process is this in the codebase? Is it there at all?
+       - How to add a header, probably some module function?
+       - How to tell where the response is going (client vs origin server)?
+       - Reeeee
+   - Lua or openrest modules are not allowed
+     - Ok
+2. Code exploration
+   - Check out how headers are added
+     - Found [ngx_http_add_header](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L537), does not do much, just appends a header.
+     - Found [ngx_http_headers_filter_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L100), this looks like mapping conf file **directive <-> in-code action**.
+       - Inside we can see `ngx_string("add_header")`, `ngx_string("add_trailer")` and that they correspond to [ngx_http_headers_add](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L775)
+       - The `ngx_http_headers_add` sets `ngx_http_add_header` as a handler ( `if (headers == &hcf->headers) { hv->handler = ngx_http_add_header;` ).
+       - Let's consolidate the overall flow:
+         1. A directive is written into `nginx.conf` -> `add_header <key> <value>` (ie. add_header X-Content-Source "CMS")
+         2. `ngx_http_headers_add` parses those directives during configuration loading.
+         3. `ngx_http_headers_add` sets handlers for those directives accordingly (like the `ngx_http_add_header`). I really like this approach!
+         4. Those handlers are used to do... hmmm, what exactly? Well to handle, but what and when?
+            - A request when it comes and we want to process it's headers.
+            - It must also be after the step of calculating the key, otherwise we would have nothing to add :D
+            - Umm looking at it, the first 2 points contradict each other. When the request comes and we have not processed anything... how can we use the CALCULATED key? => There is some other phase that processes the request before it touches the headers.
+     - The last point hinted me to specifically search for some type of phases, if they exist. Turns out they do!
+       - Phases enum here [ngx_http_core_module.h -> ngx_http_phases](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.h#L109)
+       - Searching for phases further, found [ngx_http_core_module.c -> ngx_http_handler](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L865)
+       - And more of the actual phase handlers that the `ngx_http_phases` defines. (`ngx_http_core_rewrite_phase`, `ngx_http_core_post_rewrite_phase`, `ngx_http_core_access_phase`...). They are called in a chain like manner.
+       - But hold on... these are request processing related. Adding a custom header will be in some response building phase no???
+   - 
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
 
 ## Approximate time requirements:
-**Research** (topics, terms, docs): 4h <br>
+**Research** (topics, terms): 4h <br>
 **1) - NGINX cache lookup key analysis**(pure analysis, code digging...): 8h <br>
 **2) - NGINX X-Cache-Key header addition**<br>
 **3) - DNS wildcard algorithm**<br>
