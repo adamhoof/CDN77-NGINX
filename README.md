@@ -58,10 +58,10 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
         - Responses must go on a disk to not deplete RAM. For fast lookups, we will store the key (or more metadata) in a RAM.
         - => We will need to search some interaction between the cache and filesystem (everything is a file, said Tux), since the response will be stored on a disk and we need to calculate a key representing the presence of this response.
       - Found `ngx_http_file_cache.c` file -> [ngx_http_file_cache_create_key](https://github.com/nginx/nginx/blob/b6e7eb0f5792d7a52d2675ee3906e502d63c48e3/src/http/ngx_http_file_cache.c#L228)
-        1. Here we can see that `ngx_http_cache_t*` is stored in the request `c = r->cache;`, which holds cache related information for this specific request (ie. GET /image.png).
+        1. Here we can see that `ngx_http_cache_t*` is stored in the request `c = r->cache;`, which holds cache related information for this specific request (ie. GET /image.png). Must have been prepopulated in earlier processing.
         2. The crc32 and md5 are initialized for checksum (error detection) and hashing purposes `ngx_crc32_init(c->crc32);` `ngx_md5_init(&md5);`
         3. Iterate over the key components ( apply func md5(unique key components) -> unique, deterministic output hash ) stored in c->keys, print each for debugging purposes, update crc32 and md5 calculation with this current key component. The keys are the taken from proxy_cache_key directive, which defaults to `$scheme$proxy_host$request_uri` but can be changed.
-        4. Calculate offset to house the nginx internal header containing metadata to distinguish it from the original response headers.
+        4. Calculate offset to house the nginx internal header containing metadata.
         5. Finalize the crc32 and md5 calculation. Important for us here is the md5 calculation, which stores the result into c->key as we can see in the ngx_md5.c -> [ngx_md5_final](https://github.com/nginx/nginx/blob/master/src/core/ngx_md5.c#L62)
         6. Now c->cache holds the key (calculated unique, deterministic hash)!
     - **QUESTION 3: K čemu se používá?**
@@ -80,7 +80,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
           - Found this [ngx_http_file_cache_add_file](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L2219) which seems to aggregate metadata about existing cache files, it calls ->
             - -> [ngx_http_file_cache_add](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_file_cache.c#L2273)
             1. It locks shared memory rbtree (rbtree because I looked into the lookup func, shared based on the fact the func is locking it and it is a memory area = > shared memory). from future ->> Bruh the name is shmtx and shpool, what could the sh possibly mean xddd <-- from future
-            2. Looks for a specific ngx_http_file_cache_node_t (ngx_http_file_cache_lookup), whose structure is defined [here](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_cache.h#L39), pretty big boy, this is the structure representing metadata record for a cache entry
+            2. Looks for a specific `ngx_http_file_cache_node_t` (`ngx_http_file_cache_lookup`), whose structure is defined [here](https://github.com/nginx/nginx/blob/444954abacef1d77f3dc6e9b1878684c7e6fe5b3/src/http/ngx_http_cache.h#L39), pretty big boy, this is the structure representing metadata record for a cache entry
             3. ... This is another usecase of this key, although not disjunct with the others - indexing, finding, adding, deleting metadata nodes in the shared memory rbtree
           - Wait this might actually give us the answer for **QUESTION 4: Jaká je jeho lokace z hlediska datových struktur?** - KEY IS METADATA AND WE ARE LOOKING AT METADATA NODES! Where EXACTLY is the key stored then?
             - Let's inspect the nodes again:
@@ -136,22 +136,40 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          2. `ngx_http_headers_add` parses those directives during configuration loading.
          3. `ngx_http_headers_add` sets handlers for those directives accordingly (like the `ngx_http_add_header`). I really like this approach!
          4. Those handlers are used to do... hmmm, what exactly? Well to handle, but what and when?
-            - A request when it comes and we want to process it's headers.
+            - A request when it comes and we want to process its headers.
             - It must also be after the step of calculating the key, otherwise we would have nothing to add :D
             - Umm looking at it, the first 2 points contradict each other. When the request comes and we have not processed anything... how can we use the CALCULATED key? => There is some other phase that processes the request before it touches the headers.
-     - The last point hinted me to specifically search for some type of phases, if they exist. Turns out they do!
+     - The last point hinted me to specifically search for some type of phases, if they even exist. Turns out they do!
        - Phases enum here [ngx_http_core_module.h -> ngx_http_phases](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.h#L109)
        - Searching for phases further, found [ngx_http_core_module.c -> ngx_http_handler](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L865)
        - And more of the actual phase handlers that the `ngx_http_phases` defines. (`ngx_http_core_rewrite_phase`, `ngx_http_core_post_rewrite_phase`, `ngx_http_core_access_phase`...). They are called in a chain like manner.
-       - But hold on... these are request processing related. Adding a custom header will be in some response building phase no???
-   - 
+       - **But hold on... these are request processing related. Adding a custom header will be in some response building phase no???**
+   - So let's take it from the other side, is there a point where we send response?
+     - Found [ngx_http_send_response](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1760), ahaaaaa here we go, already see a plenty of header related stuff.
+       - It calls [ngx_http_send_header](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1839)
+         - Why are we sending header on its own? -> Response header is sent before response body.
+         - This function calls `ngx_http_top_header_filter`, what is that? -> The call initiates a chain process of filters, each doing their part in modifying, adding... the headers. **I believe this is the key to solving this task!**
+       - It returns [ngx_http_output_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1861)
+         - Why? -> Similar to the header filter chain, but this triggers the response body filter chain.
+         - Since we care about the headers, response body manipulation is not that important for us, but good to know.
+   - Great so the next step is to create our own filter, which appends the calculated X-Cache-Key and then figure how to inject it into the filter chain.
+     - Let's look at some existing filters to see how things work.
+       - Found this [ngx_http_userid_filter_module](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c). Looks like a whole module?
+         - This is familiar, a mapping of conf directives <-> in-code action [ngx_http_userid_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L120). We don't need this, not introducing any new directives.
+         - HTTP module context [ngx_http_userid_filter_module_ctx](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L189). This defines what to do during each HTTP module phase.
+         - Top level nginx module definition, more general [ngx_module_t](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L204). This defines version, context (the one above), commands, module type and what to do in initialization/exit phases.
+         - This is the actual coordinator of the filter process [ngx_http_userid_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L227).
+         - Some specific functions to the userid that the coordinator uses (get_uid, set_uid, create_uid)... this will be the appending logic in our case.
+         - Now we are talking, this is DEFINITELY important, it manipulates the header filter chain! [ngx_http_userid_init](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L777).
+   - So this is how the filter can be injected, not by just implementing some function, but plugging in a module that says "hey, I have a header filter". Makes sense, nginx is **small core + pluggable modules**. Everything is a module.
+     -  
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
 
 ## Approximate time requirements:
 **Research** (topics, terms): 4h <br>
-**1) - NGINX cache lookup key analysis**(pure analysis, code digging...): 8h <br>
-**2) - NGINX X-Cache-Key header addition**<br>
+**1) - NGINX cache lookup key analysis**: 8h <br>
+**2) - NGINX X-Cache-Key header addition**: 6h <br>
 **3) - DNS wildcard algorithm**<br>
 **4) - Bonus Lua module API extension**<br>
 **Documentation** (thought process capture, ideas, research): 10h <br>
