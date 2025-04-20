@@ -156,20 +156,32 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
      - Let's look at some existing filters to see how things work.
        - Found this [ngx_http_userid_filter_module](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c). Looks like a whole module?
          - This is familiar, a mapping of conf directives <-> in-code action [ngx_http_userid_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L120). We don't need this, not introducing any new directives.
-         - HTTP module context [ngx_http_userid_filter_module_ctx](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L189). This defines what to do during each HTTP module phase.
-         - Top level nginx module definition, more general [ngx_module_t](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L204). This defines version, context (the one above), commands, module type and what to do in initialization/exit phases.
-         - This is the actual coordinator of the filter process [ngx_http_userid_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L227).
+         - HTTP module context [ngx_http_userid_filter_module_ctx](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L189). **This defines how the module interacts with HTTP configuration scopes (so what to do when ie. server{}, location{} is created). As well as what to do in pre/post configuration (that means either pre/post directives have been processed).**
+         - Top level nginx module definition, more general [ngx_module_t](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L204). **This defines version, context (the one above), commands, module type and what to do in the initialization/exit server-wide events.**
+         - This is the coordinator of the filter process [ngx_http_userid_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L227).
          - Some specific functions to the userid that the coordinator uses (get_uid, set_uid, create_uid)... this will be the appending logic in our case.
-         - Now we are talking, this is DEFINITELY important, it manipulates the header filter chain! [ngx_http_userid_init](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L777).
-   - So this is how the filter can be injected, not by just implementing some function, but plugging in a module that says "hey, I have a header filter". Makes sense, nginx is **small core + pluggable modules**. Everything is a module.
-     -  
+         - Now we are talking, this is DEFINITELY important, it manipulates the header filter chain! [ngx_http_userid_init](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L777). 
+3. Custom module implementation
+   - So we know that the filter can be injected not by just implementing some function and calling it, but plugging in a module that says "hey, I have a header filter". Makes sense, nginx is **small core + pluggable modules**. Everything is a module.
+     - So far it is unclear to me how to define the `ngx_module_t` and `ngx_http_module_t`, let's search what each does and break it down.
+       - `ngx_module_t`: 
+         - Server-wide events -> Since this is just a runtime filter that appends a header, nothing special needs to be done when a server-wide event occurs, so all NULL.
+         - Version, padding -> Will just copy from the userid filter module.
+         - Commands -> We do not introduce any new directives, so NULL.
+         - Module context -> Just a pointer to the struct `ngs_http_module_t` below.
+         - Module type -> Clearly an HTTP module.
+       - `ngx_http_module_t`:
+         - preconfiguration -> nothing, we do not need to do anything before directives processing.
+         - postconfiguration -> this is crucial and needs to be configured, here we inject our filter!
+         - Scope interaction -> there is no scope-dependent behavior I would say, so NULL for all of them.
+    
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
 
 ## Approximate time requirements:
 **Research** (topics, terms): 4h <br>
 **1) - NGINX cache lookup key analysis**: 8h <br>
-**2) - NGINX X-Cache-Key header addition**: 6h <br>
+**2) - NGINX X-Cache-Key header addition**: 8h <br>
 **3) - DNS wildcard algorithm**<br>
 **4) - Bonus Lua module API extension**<br>
-**Documentation** (thought process capture, ideas, research): 10h <br>
+**Documentation** (thought process and ideas capture): 10h <br>
