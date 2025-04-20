@@ -156,8 +156,8 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
      - Let's look at some existing filters to see how things work.
        - Found this [ngx_http_userid_filter_module](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c). Looks like a whole module?
          - This is familiar, a mapping of conf directives <-> in-code action [ngx_http_userid_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L120). We don't need this, not introducing any new directives.
-         - HTTP module context [ngx_http_userid_filter_module_ctx](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L189). **This defines how the module interacts with HTTP configuration scopes (so what to do when ie. server{}, location{} is created). As well as what to do in pre/post configuration (that means either pre/post directives have been processed).**
-         - Top level nginx module definition, more general [ngx_module_t](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L204). **This defines version, context (the one above), commands, module type and what to do in the initialization/exit server-wide events.**
+         - HTTP module context [ngx_http_userid_filter_module_ctx](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L189). from future --> This defines how the module interacts with HTTP configuration scopes (so what to do when ie. server{}, location{} is created). It also defines what to do in pre/post configuration (that means either pre/post directives have been processed). <-- from future
+         - Top level nginx module definition, more general [ngx_module_t](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L204). from future --> This defines version, context (the one above), commands, module type and what to do in the initialization/exit server-wide events. <-- from future
          - This is the coordinator of the filter process [ngx_http_userid_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L227).
          - Some specific functions to the userid that the coordinator uses (get_uid, set_uid, create_uid)... this will be the appending logic in our case.
          - Now we are talking, this is DEFINITELY important, it manipulates the header filter chain! [ngx_http_userid_init](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L777). 
@@ -174,6 +174,22 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          - preconfiguration -> nothing, we do not need to do anything before directives processing.
          - postconfiguration -> this is crucial and needs to be configured, here we inject our filter!
          - Scope interaction -> there is no scope-dependent behavior I would say, so NULL for all of them.
+     - Alright now it is a time to start the implementation. Let's checkout [NGINX contributing](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/CONTRIBUTING.md) guide to see what to look out for.
+       - Here is [code style](https://nginx.org/en/docs/dev/development_guide.html#code_style). Ehhh first common pitfalls point is "Writing a C module -> do not try to write one if you do not have to". Hope I did not miss anything :D But the task confirms it can't be done with a simple configuration so guess we good.
+         - Damn this document is actually an awesome overview. There are some very relevant chapters on how to build filter modules, response header info, code style, tips.
+       - Setup dev env:
+         - We need to compile [from source](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#sources) since we wanna add a custom module.
+           - Download dependencies as the guide says - pcre, zlib, openssl. Gcc and make are a must ofc!
+           - Download nginx project (stable), unpack.
+           - Before running `./configure`, we need to specify a config file so that nginx can register it, see config file in this repo. Taken from [here](https://nginx.org/en/docs/dev/development_guide.html#http_building_filter_modules).
+           - Run `./configure --prefix="/opt/nginx-custom" --with-http_ssl_module --add-module="/path/to/custom/module"`
+             - [prefix](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#configuring-nginx-paths): set install dir to prevent possible clash with other nginx installation,
+             - [ssl](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-modules-not-built-by-default): https is the default nowadays and I noticed ssl is not included by default => no https.
+             - [add-module](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-third-party-modules): tell nginx to count our custom 3rd party module in.
+           - Seems like the `./configure` is not complaining about our module, output part -> "`adding module in /path/to/custom/module`" "` +  was configured`"
+           - `make`! This fails now, but that is ok, the file is empty. Important is that it did not fail on other steps.
+           - Create CMakeLists.txt (leave me ok zoomers like CMakeLists.txt more than Makefile), check it out in the repo here.
+       - Coding time?
     
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
