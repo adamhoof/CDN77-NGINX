@@ -181,15 +181,16 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          - We need to compile [from source](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#sources) since we wanna add a custom module.
            - Download dependencies as the guide says - pcre, zlib, openssl. Gcc and make are a must ofc!
            - Download nginx project (stable), unpack.
-           - Before running `./configure`, we need to specify a config file so that nginx can register it, see config file in this repo. Taken from [here](https://nginx.org/en/docs/dev/development_guide.html#http_building_filter_modules).
+           - Before running `./configure`, we need to specify a config file so that nginx can register it, see config file [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/config). Taken from docs [here](https://nginx.org/en/docs/dev/development_guide.html#http_building_filter_modules).
            - Run `./configure --prefix="/opt/nginx-custom" --with-http_ssl_module --add-module="/path/to/custom/module"`
              - [prefix](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#configuring-nginx-paths): set install dir to prevent possible clash with other nginx installation,
              - [ssl](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-modules-not-built-by-default): https is the default nowadays and I noticed ssl is not included by default => no https.
              - [add-module](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-third-party-modules): tell nginx to count our custom 3rd party module in.
            - Seems like the `./configure` is not complaining about our module, output part -> "`adding module in /path/to/custom/module`" "` +  was configured`"
            - `make`! This fails now, but that is ok, the file is empty. Important is that it did not fail on other steps.
-           - Create CMakeLists.txt (leave me ok zoomers like CMakeLists.txt more than Makefile), check it out in the repo here.
-       - Coding time?
+           - Create CMakeLists.txt (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
+       - Coding time? I think so
+         - So we will start with what we already figured out earlier, the module struct definitions. Before sleep [commit](https://github.com/adamhoof/CDN77-NGINX/commit/0bfe24d59604c0a07d96d1dbcb11efc17dc21d6f).
     
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
