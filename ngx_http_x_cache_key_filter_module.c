@@ -3,6 +3,9 @@
 #include <ngx_http.h>
 
 static ngx_int_t ngx_http_x_cache_key_filter_init(ngx_conf_t *cf);
+static ngx_int_t ngx_http_x_cache_key_header_filter(ngx_http_request_t *r);
+
+static ngx_http_output_header_filter_pt  ngx_http_next_header_filter;
 
 /* Module context definition */
 static ngx_http_module_t  ngx_http_x_cache_key_filter_module_ctx = {
@@ -35,3 +38,19 @@ ngx_module_t  ngx_http_x_cache_key_filter_module = {
     NULL,                                  /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+/*
+ * Post-configuration initialization function.
+ * Injects header filter into the filter chain.
+ */
+static ngx_int_t
+ngx_http_x_cache_key_filter_init(ngx_conf_t *cf)
+{
+    ngx_http_next_header_filter = ngx_http_top_header_filter;
+    ngx_http_top_header_filter = ngx_http_x_cache_key_header_filter;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cf->log, 0,
+                   "ngx_http_x_cache_key_filter initialized");
+
+    return NGX_OK;
+}

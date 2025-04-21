@@ -191,6 +191,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
            - Create CMakeLists.txt (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
        - Coding time? I think so
          - So we will start with what we already figured out earlier, the module struct definitions. Before sleep [commit](https://github.com/adamhoof/CDN77-NGINX/commit/0bfe24d59604c0a07d96d1dbcb11efc17dc21d6f).
+         - Now let's follow the example userid filter module again and create the post-configuration init function. 
     
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
