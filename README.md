@@ -174,24 +174,40 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          - preconfiguration -> nothing, we do not need to do anything before directives processing.
          - postconfiguration -> this is crucial and needs to be configured, here we inject our filter!
          - Scope interaction -> there is no scope-dependent behavior I would say, so NULL for all of them.
-     - Alright now it is a time to start the implementation. Let's checkout [NGINX contributing](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/CONTRIBUTING.md) guide to see what to look out for.
+     - Alright now it is time to start the implementation. Let's checkout [NGINX contributing](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/CONTRIBUTING.md) guide to see how we should structure the code etc.
        - Here is [code style](https://nginx.org/en/docs/dev/development_guide.html#code_style). Ehhh first common pitfalls point is "Writing a C module -> do not try to write one if you do not have to". Hope I did not miss anything :D But the task confirms it can't be done with a simple configuration so guess we good.
          - Damn this document is actually an awesome overview. There are some very relevant chapters on how to build filter modules, response header info, code style, tips.
        - Setup dev env:
          - We need to compile [from source](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#sources) since we wanna add a custom module.
            - Download dependencies as the guide says - pcre, zlib, openssl. Gcc and make are a must ofc!
            - Download nginx project (stable), unpack.
-           - Before running `./configure`, we need to specify a config file so that nginx can register it, see config file [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/config). Taken from docs [here](https://nginx.org/en/docs/dev/development_guide.html#http_building_filter_modules).
+           - Before running `./configure`, we need to specify a config file so that nginx can register it, see config file [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/config). Inspired from the docs example [building filter module](https://nginx.org/en/docs/dev/development_guide.html#http_building_filter_modules).
            - Run `./configure --prefix="/opt/nginx-custom" --with-http_ssl_module --add-module="/path/to/custom/module"`
              - [prefix](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#configuring-nginx-paths): set install dir to prevent possible clash with other nginx installation,
              - [ssl](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-modules-not-built-by-default): https is the default nowadays and I noticed ssl is not included by default => no https.
              - [add-module](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-third-party-modules): tell nginx to count our custom 3rd party module in.
            - Seems like the `./configure` is not complaining about our module, output part -> "`adding module in /path/to/custom/module`" "` +  was configured`"
-           - `make`! This fails now, but that is ok, the file is empty. Important is that it did not fail on other steps.
-           - Create CMakeLists.txt (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
+           - `make`! This fails now, but that is ok, the module .c file is empty. Important is that it did not fail on other steps.
+           - Create CMakeLists.txt and reference the downloaded nginx project => makes static analysis work in CLion IDE (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
        - Coding time? I think so
          - So we will start with what we already figured out earlier, the module struct definitions. Before sleep [commit](https://github.com/adamhoof/CDN77-NGINX/commit/0bfe24d59604c0a07d96d1dbcb11efc17dc21d6f).
          - Now let's follow the example userid filter module again and create the post-configuration init function. [Commit](https://github.com/adamhoof/CDN77-NGINX/commit/23d9200f5ff3f69fe829db6725d79ea13b51cd47).
+         - Next step is to create the actual filter function. This is the main logic part.
+           1. The nginx dev guide tells us to put declarations at the top, so we do that.
+           2. Call the next header filter first to follow the chain, if fails return. `rc = ngx_http_next_header_filter(r);` `if (rc != NGX_OK) { return rc; }`.
+           3. Process only the main request, no sub-requests. `if (r != r->main) { return rc; }`.
+           4. Check cache context existence `c = r->cache;` `if (c == NULL) { return rc; }`.
+              - Issue: CLion does not see `r->cache`. Hmm, so when `./configure` was invoked, it definitely compiled with the cache module.
+                - The problem is that CLion evaluates `#if (NGX_HTTP_CACHE) ngx_http_cache_t *cache; #endif` as **false** and thus it does not see `ngx_http_cache_t` inside `r->cache` request.
+                - But the CMakeLists.txt probably does not have a chance to know how we compiled nginx, we need to tell him about this flag being **true**.
+              - Fix: Add `target_compile_definitions(ngx_http_x_cache_key_filter_module PRIVATE NGX_HTTP_CACHE=1)` to CMakeLists.txt. -> Works!
+           5. Allocate memory from the request's pool, check...  `hex_key_ngx_str.data = ngx_pnalloc(r->pool, hex_key_str_len);` `if (hex_key_ngx_str.data == NULL) {...` guide ref on [memory management -> pool](https://nginx.org/en/docs/dev/development_guide.html#memory_management) 
+              - "ngx_pnalloc(pool, size) — Allocate unaligned memory from the specified pool. **Mostly used for allocating strings.**"
+           6. Hex dump the 16 byte binary key into 32 byte hex string (MD5 hash is 128 bits == 32 bytes).
+              - The conversion is like this because each binary byte is 8 bits and one hex char represents only 4 bits => 2x the space.
+           7. Add a new header `h = ngx_list_push(&r->headers_out.headers);`
+           8. Example [here](https://nginx.org/en/docs/dev/development_guide.html#http_response) shows how to fill h (h->hash, h->key...) and the value is our hex key string.
+           9. Done, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/cb7a803c9360b46a9bdfd5751168c7002f8e396b)
     
 ## 3) - DNS wildcard algorithm
 ## 4) - Bonus Lua module API extension
