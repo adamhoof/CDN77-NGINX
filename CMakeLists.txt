@@ -16,3 +16,5 @@ include_directories(
 add_library(ngx_http_x_cache_key_filter_module STATIC
         ngx_http_x_cache_key_filter_module.c
 )
+
+target_compile_definitions(ngx_http_x_cache_key_filter_module PRIVATE NGX_HTTP_CACHE=1)
