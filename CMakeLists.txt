@@ -7,10 +7,10 @@ include_directories(
         "${NGINX_SRC_DIR}/src/core"
         "${NGINX_SRC_DIR}/src/event"
         "${NGINX_SRC_DIR}/src/event/modules"
-        "${NGINX_SRC_DIR}/src/os/unix"  # Or src/os/win32 if applicable
+        "${NGINX_SRC_DIR}/src/os/unix"
         "${NGINX_SRC_DIR}/src/http"
         "${NGINX_SRC_DIR}/src/http/modules"
-        "${NGINX_SRC_DIR}/objs"         # IMPORTANT: For generated headers like ngx_auto_headers.h
+        "${NGINX_SRC_DIR}/objs"
 )
 
 add_library(ngx_http_x_cache_key_filter_module STATIC

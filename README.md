@@ -114,7 +114,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
 
 ## 2) - NGINX X-Cache-Key header addition
 ### Thought process (literary):
-1. First let's consider the constraints
+#### Constraints consideration
    - The X-Cache-Key must be the calculated key from 1), Questions 1 + 2.
      - After we even figure out where to start, this should not be super hard - we already know where and how it is calculated, can borrow the function if needed. 
    - The header must be sent to the client (in a response to the previous request), not to the origin.
@@ -125,8 +125,8 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
        - Reeeee
    - Lua or openrest modules are not allowed
      - Ok
-2. Code exploration
-   - Check out how headers are added
+#### Code exploration
+   1. Check out how headers are added
      - Found [ngx_http_add_header](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L537), does not do much, just appends a header.
      - Found [ngx_http_headers_filter_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L100), this looks like mapping conf file **directive <-> in-code action**.
        - Inside we can see `ngx_string("add_header")`, `ngx_string("add_trailer")` and that they correspond to [ngx_http_headers_add](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_headers_filter_module.c#L775)
@@ -144,7 +144,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
        - Searching for phases further, found [ngx_http_core_module.c -> ngx_http_handler](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L865)
        - And more of the actual phase handlers that the `ngx_http_phases` defines. (`ngx_http_core_rewrite_phase`, `ngx_http_core_post_rewrite_phase`, `ngx_http_core_access_phase`...). They are called in a chain like manner.
        - **But hold on... these are request processing related. Adding a custom header will be in some response building phase no???**
-   - So let's take it from the other side, is there a point where we send response?
+   2. So let's take it from the other side, is there a point where we send response?
      - Found [ngx_http_send_response](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1760), ahaaaaa here we go, already see a plenty of header related stuff.
        - It calls [ngx_http_send_header](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1839)
          - Why are we sending header on its own? -> Response header is sent before response body.
@@ -152,7 +152,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
        - It returns [ngx_http_output_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/ngx_http_core_module.c#L1861)
          - Why? -> Similar to the header filter chain, but this triggers the response body filter chain.
          - Since we care about the headers, response body manipulation is not that important for us, but good to know.
-   - Great so the next step is to create our own filter, which appends the calculated X-Cache-Key and then figure how to inject it into the filter chain.
+   3. Great so the next step is to create our own filter, which appends the calculated X-Cache-Key and then figure how to inject it into the filter chain.
      - Let's look at some existing filters to see how things work.
        - Found this [ngx_http_userid_filter_module](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c). Looks like a whole module?
          - This is familiar, a mapping of conf directives <-> in-code action [ngx_http_userid_commands](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L120). We don't need this, not introducing any new directives.
@@ -161,7 +161,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          - This is the coordinator of the filter process [ngx_http_userid_filter](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L227).
          - Some specific functions to the userid that the coordinator uses (get_uid, set_uid, create_uid)... this will be the appending logic in our case.
          - Now we are talking, this is DEFINITELY important, it manipulates the header filter chain! [ngx_http_userid_init](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c#L777). 
-3. Custom module implementation
+#### Custom module implementation
    - So we know that the filter can be injected not by just implementing some function and calling it, but plugging in a module that says "hey, I have a header filter". Makes sense, nginx is **small core + pluggable modules**. Everything is a module.
      - So far it is unclear to me how to define the `ngx_module_t` and `ngx_http_module_t`, let's search what each does and break it down.
        - `ngx_module_t`: 
@@ -188,7 +188,8 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
              - [add-module](https://docs.nginx.com/nginx/admin-guide/installing-nginx/installing-nginx-open-source/#including-third-party-modules): tell nginx to count our custom 3rd party module in.
            - Seems like the `./configure` is not complaining about our module, output part -> "`adding module in /path/to/custom/module`" "` +  was configured`"
            - `make`! This fails now, but that is ok, the module .c file is empty. Important is that it did not fail on other steps.
-           - Create CMakeLists.txt and reference the downloaded nginx project => makes static analysis work in CLion IDE (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
+         - Inside the custom module, create CMakeLists.txt and reference the downloaded nginx project => makes static analysis work in CLion IDE (leave me ok, zoomers like CMakeLists.txt more than Makefile), check it out in the repo [here](https://github.com/adamhoof/CDN77-NGINX/blob/master/CMakeLists.txt).
+           - The `include_directories` of this CMakeLists.txt is what I saw in the make output, probably a good starter -> `... -I src/core -I src/event -I src/event/modules -I src/event/quic -I src/os/unix -I objs -I src/http -I src/http/modules ...`
        - Coding time? I think so
          - So we will start with what we already figured out earlier, the module struct definitions. Before sleep [commit](https://github.com/adamhoof/CDN77-NGINX/commit/0bfe24d59604c0a07d96d1dbcb11efc17dc21d6f).
          - Now let's follow the example userid filter module again and create the post-configuration init function. [Commit](https://github.com/adamhoof/CDN77-NGINX/commit/23d9200f5ff3f69fe829db6725d79ea13b51cd47).
@@ -201,21 +202,36 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
                 - The problem is that CLion evaluates `#if (NGX_HTTP_CACHE) ngx_http_cache_t *cache; #endif` as **false** and thus it does not see `ngx_http_cache_t` inside `r->cache` request.
                 - But the CMakeLists.txt probably does not have a chance to know how we compiled nginx, we need to tell him about this flag being **true**.
               - Fix: Add `target_compile_definitions(ngx_http_x_cache_key_filter_module PRIVATE NGX_HTTP_CACHE=1)` to CMakeLists.txt. -> Works!
-           5. Allocate memory from the request's pool, check...  `hex_key_ngx_str.data = ngx_pnalloc(r->pool, hex_key_str_len);` `if (hex_key_ngx_str.data == NULL) {...` guide ref on [memory management -> pool](https://nginx.org/en/docs/dev/development_guide.html#memory_management) 
-              - "ngx_pnalloc(pool, size) — Allocate unaligned memory from the specified pool. **Mostly used for allocating strings.**"
+           5. Allocate memory from the request's pool, check...  `hex_key_ngx_str.data = ngx_pnalloc(r->pool, hex_key_str_len);` `if (hex_key_ngx_str.data == NULL) {...` 
+              - Guide on [memory management -> pool](https://nginx.org/en/docs/dev/development_guide.html#memory_management) tells us "ngx_pnalloc(pool, size) — Allocate unaligned memory from the specified pool. **Mostly used for allocating strings.**"
            6. Hex dump the 16 byte binary key into 32 byte hex string (MD5 hash is 128 bits == 32 bytes).
               - The conversion is like this because each binary byte is 8 bits and one hex char represents only 4 bits => 2x the space.
            7. Add a new header `h = ngx_list_push(&r->headers_out.headers);`
            8. Example [here](https://nginx.org/en/docs/dev/development_guide.html#http_response) shows how to fill the header (`h->hash`, `h->key`...) and the value is our hex key string.
            9. Done, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/cb7a803c9360b46a9bdfd5751168c7002f8e396b)
-    
+       - Time to test whether it works as intended
+         - Repeat nginx project compilation process
+           - cleanup first `make clean`
+           - same as before `./configure --prefix="/opt/nginx-custom" --with-http_ssl_module --add-module="/path/to/custom/module"`, no errors again, expected (config did not change) but good
+           - `make`, this time it seems everything is intact
+               - `... copmilation flags ... -I src/core -I src/event -I src/event/modules ... more ... -o objs/addon/ngx_http_x_cache_key_filter_module/ngx_http_x_cache_key_filter_module.o /path/to/custom/module`
+         - Create `nginx.conf` file in [repo](https://github.com/adamhoof/CDN77-NGINX/blob/master/test/nginx.conf). Descriptions of directives is there as well.
+           - Basic conf taken from [beginner's guide](https://nginx.org/en/docs/beginners_guide.html#proxy).
+           - Advanced proxy conf in this [article](https://betterstack.com/community/questions/how-to-setup-nginx-as-caching-reverse-proxy/).
+           - Looked up what the directives mean in [ngx_http_proxy_module docs](https://nginx.org/en/docs/http/ngx_http_proxy_module.html). 
+           - SSL conf in [nginx admin guide](https://docs.nginx.com/nginx/admin-guide/security-controls/securing-http-traffic-upstream/).
+             - Generation of self signed certificates needs to be done to enable secure connection to our proxy. Also make it script friendly by specifying -nodes and -subj.
+             - `openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/ssl/nginx-selfsigned.key -out /etc/nginx/ssl/nginx-selfsigned.crt -subj "CN=localhost"`
+         - Run nginx with our nginx.conf file
+           - `sudo ./objs/nginx -c /path/to/nginx.conf`
+           - `ps -A | grep nginx` confirms nginx is running
+
+
 ## 3) - DNS wildcard algorithm
-## 4) - Bonus Lua module API extension
 
 ## Approximate time requirements:
 **Research** (topics, terms): 4h <br>
 **1) - NGINX cache lookup key analysis**: 8h <br>
-**2) - NGINX X-Cache-Key header addition**: 8h <br>
+**2) - NGINX X-Cache-Key header addition**: 10h <br>
 **3) - DNS wildcard algorithm**<br>
-**4) - Bonus Lua module API extension**<br>
 **Documentation** (thought process and ideas capture): 10h <br>
