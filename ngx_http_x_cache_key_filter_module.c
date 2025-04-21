@@ -54,3 +54,64 @@ ngx_http_x_cache_key_filter_init(ngx_conf_t *cf)
 
     return NGX_OK;
 }
+
+/*
+ * The actual header filter function.
+ * Adds X-Cache-Key header if the cache key was calculated for the request.
+ */
+static ngx_int_t
+ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
+{
+    ngx_http_cache_t  *c;
+    ngx_str_t          hex_key_ngx_str;
+    ngx_table_elt_t   *h;
+    ngx_int_t          rc;
+    ngx_uint_t         hex_key_str_len = 32;
+
+    // Call previous filter chain function first
+    rc = ngx_http_next_header_filter(r);
+
+    // Return if it was not successful
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    // Operate only on the main request
+    if (r != r->main) {
+        return rc;
+    }
+
+    // Do we have a cache context?
+    c = r->cache;
+    if (c == NULL) {
+        return rc;
+    }
+
+    // Allocate memory for the key string
+    hex_key_ngx_str.data = ngx_pnalloc(r->pool, hex_key_str_len);
+    if (hex_key_ngx_str.data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "failed to allocate memory for X-Cache-Key value");
+        return rc;
+    }
+
+    // Convert the 16-byte binary key to a 32-byte hex string
+    ngx_hex_dump(hex_key_ngx_str.data, c->key, NGX_HTTP_CACHE_KEY_LEN);
+    hex_key_ngx_str.len = hex_key_str_len;
+
+    // Add the X-Cache-Key header
+    h = ngx_list_push(&r->headers_out.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    // Set header fields
+    h->hash = 1;
+    ngx_str_set(&h->key, "X-Cache-Key");
+    h->value = hex_key_ngx_str;
+
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "added header: X-Cache-Key: %V", &h->value);
+
+    return rc;
+}
