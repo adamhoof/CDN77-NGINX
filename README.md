@@ -206,7 +206,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
            6. Hex dump the 16 byte binary key into 32 byte hex string (MD5 hash is 128 bits == 32 bytes).
               - The conversion is like this because each binary byte is 8 bits and one hex char represents only 4 bits => 2x the space.
            7. Add a new header `h = ngx_list_push(&r->headers_out.headers);`
-           8. Example [here](https://nginx.org/en/docs/dev/development_guide.html#http_response) shows how to fill h (h->hash, h->key...) and the value is our hex key string.
+           8. Example [here](https://nginx.org/en/docs/dev/development_guide.html#http_response) shows how to fill the header (`h->hash`, `h->key`...) and the value is our hex key string.
            9. Done, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/cb7a803c9360b46a9bdfd5751168c7002f8e396b)
     
 ## 3) - DNS wildcard algorithm
