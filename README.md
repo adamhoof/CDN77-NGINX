@@ -262,19 +262,44 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
   - If we put `add_header X-Cache-Key "$scheme$request_method$host$request_uri"` into `nginx.conf`, it is not the calculated key, it is the **input** that goes into the md5 function, not it's **output**!
   - The calculated key is not exposed as an nginx variable to be used in `nginx.conf`, exists only internally.
 ##### DOCKER TIME
-- So now that we know our tests ran successfully on the local environment, let's package it into a docker based env for easy reproducibility.
-- Follow the standard 2-stage pattern for small final image, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/fa0a785ded3b137af2e44c8269f7c0ac8d95517f)
-  - Build stage -> Compile nginx with our custom module here. Chosen lightweight Alpine Linux.
-  - Runtime stage -> Run the small compiled binary here. Chosen lightweight Alpine Linux.
-- Encountered issues:
-  - Issue1: Some dir needed for Nginx did not exist in the Alpine by default.
-    - Fix1: Created dirs inside the container.
-  - Issue2: Permission issues, avoid root user.
-    - Fix2: Create a user with suitable permissions.
-  - Issue3: Logging was not visible (logged into the logs directory)
-    - Fix3: Redirect error log into `/dev/stderr`, access log into `/dev/stdout`, [edited nginx.conf](https://github.com/adamhoof/CDN77-NGINX/commit/eebbdb3ca96d3a036f83732df73d50bc113ae898)
-  - Issue4: Logging too verbose to be useful for testing our module
-    - Fix4: Filter out only our logs with simple grep filter `docker logs -f nginx-test 2>&1 | grep "XCKF"`
+- Create Dockerfile
+  - So now that we know our tests ran successfully on the local environment, let's package it into a docker based env for easy reproducibility.
+  - Follow the standard 2-stage pattern for small final image, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/fa0a785ded3b137af2e44c8269f7c0ac8d95517f)
+    - Build stage -> Compile nginx with our custom module here. Chosen lightweight Alpine Linux.
+    - Runtime stage -> Run the small compiled binary here. Chosen lightweight Alpine Linux.
+  - Encountered issues:
+    - Issue1: Some dir needed for Nginx did not exist in the Alpine by default.
+      - Fix1: Created dirs inside the container.
+    - Issue2: Permission issues, avoid root user.
+      - Fix2: Create a user with suitable permissions.
+    - Issue3: Logging was not visible (logged into the logs directory)
+      - Fix3: Redirect error log into `/dev/stderr`, access log into `/dev/stdout`, [edited nginx.conf](https://github.com/adamhoof/CDN77-NGINX/commit/eebbdb3ca96d3a036f83732df73d50bc113ae898)
+    - Issue4: Logging too verbose to be useful for testing our module
+      - Fix4: Filter out only our logs with simple grep filter `docker logs -f nginx-test 2>&1 | grep "XCKF"`
+- Test the setup
+  - Clone repo
+    - `git clone git@github.com:adamhoof/CDN77-NGINX.git`
+    - `cd CDN77-NGINX`
+  - Build Docker image
+    - `docker build -t nginx-xckf:latest .`
+  - Run container
+    - `docker run -d --name nginx-test -p 8443:8443 nginx-xckf:latest`
+  - Follow docker logs
+    - `docker logs -f nginx-test 2>&1 | grep "XCKF"`
+  - Make test request
+    - New terminal window, paste -> `curl -k -I https://localhost:8443/`
+  - Expected output
+    - In terminal where docker runs, we should see logs from our custom Nginx filter module
+      - `... XCKF: "HEAD / HTTP/1.1" 503 "curl/8.9.1" cache_status=HIT`
+      - `... XCKF: Filter called;`
+      - `... XCKF: Cache context found`
+      - `... XCKF: added header: X-Cache-Key: 6d2ba80804d06a98535b676be52d205f`
+    - In terminal where request was made, we should see a response and appended X-Cache-Key header
+      - `HTTP/1.1 200 OK
+        Server: nginx/1.26.3
+        Date, Content Type, ....
+        X-Cache-Key: 6d2ba80804d06a98535b676be52d205f`
+
 
 
 ## 3) - DNS wildcard algorithm
