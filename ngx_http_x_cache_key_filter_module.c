@@ -49,8 +49,8 @@ ngx_http_x_cache_key_filter_init(ngx_conf_t *cf)
     ngx_http_next_header_filter = ngx_http_top_header_filter;
     ngx_http_top_header_filter = ngx_http_x_cache_key_header_filter;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cf->log, 0,
-                   "ngx_http_x_cache_key_filter initialized");
+    ngx_log_error(NGX_LOG_NOTICE, cf->log, 0,
+                   "XCKF: ngx_http_x_cache_key_filter initialized");
 
     return NGX_OK;
 }
@@ -62,6 +62,8 @@ ngx_http_x_cache_key_filter_init(ngx_conf_t *cf)
 static ngx_int_t
 ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
 {
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "XCKF: Filter called");
     ngx_http_cache_t  *c;
     ngx_str_t          hex_key_ngx_str;
     ngx_table_elt_t   *h;
@@ -76,6 +78,9 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
         return rc;
     }
 
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "XCKF: Next filter returned 0");
+
     // Operate only on the main request
     if (r != r->main) {
         return rc;
@@ -87,11 +92,14 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
         return rc;
     }
 
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "XCKF: Cache context found");
+
     // Allocate memory for the key string
     hex_key_ngx_str.data = ngx_pnalloc(r->pool, hex_key_str_len);
     if (hex_key_ngx_str.data == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "failed to allocate memory for X-Cache-Key value");
+                      "XCKF: failed to allocate memory for X-Cache-Key value");
         return rc;
     }
 
@@ -111,7 +119,7 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
     h->value = hex_key_ngx_str;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "added header: X-Cache-Key: %V", &h->value);
+                   "XCKF: added header: X-Cache-Key: %V", &h->value);
 
     return rc;
 }
