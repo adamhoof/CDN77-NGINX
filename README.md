@@ -263,7 +263,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
   - The calculated key is not exposed as an nginx variable to be used in `nginx.conf`, exists only internally.
 ##### DOCKER TIME
 - So now that we know our tests ran successfully on the local environment, let's package it into a docker based env for easy reproducibility.
-- Follow the standard 2-stage pattern for small final image:
+- Follow the standard 2-stage pattern for small final image, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/fa0a785ded3b137af2e44c8269f7c0ac8d95517f)
   - Build stage -> Compile nginx with our custom module here. Chosen lightweight Alpine Linux.
   - Runtime stage -> Run the small compiled binary here. Chosen lightweight Alpine Linux.
 - Encountered issues:
