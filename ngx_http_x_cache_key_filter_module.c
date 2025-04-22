@@ -67,29 +67,17 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
     ngx_http_cache_t  *c;
     ngx_str_t          hex_key_ngx_str;
     ngx_table_elt_t   *h;
-    ngx_int_t          rc;
     ngx_uint_t         hex_key_str_len = 32;
-
-    // Call previous filter chain function first
-    rc = ngx_http_next_header_filter(r);
-
-    // Return if it was not successful
-    if (rc != NGX_OK) {
-        return rc;
-    }
-
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "XCKF: Next filter returned 0");
 
     // Operate only on the main request
     if (r != r->main) {
-        return rc;
+        ngx_http_next_header_filter(r);
     }
 
     // Do we have a cache context?
     c = r->cache;
     if (c == NULL) {
-        return rc;
+        return ngx_http_next_header_filter(r);
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -100,7 +88,7 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
     if (hex_key_ngx_str.data == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "XCKF: failed to allocate memory for X-Cache-Key value");
-        return rc;
+        return NGX_ERROR;
     }
 
     // Convert the 16-byte binary key to a 32-byte hex string
@@ -118,8 +106,10 @@ ngx_http_x_cache_key_header_filter(ngx_http_request_t *r)
     ngx_str_set(&h->key, "X-Cache-Key");
     h->value = hex_key_ngx_str;
 
+
+
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "XCKF: added header: X-Cache-Key: %V", &h->value);
 
-    return rc;
+    return ngx_http_next_header_filter(r);
 }
