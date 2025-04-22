@@ -210,12 +210,12 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
            8. Example [here](https://nginx.org/en/docs/dev/development_guide.html#http_response) shows how to fill the header (`h->hash`, `h->key`...) and the value is our hex key string.
            9. Done, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/cb7a803c9360b46a9bdfd5751168c7002f8e396b)
        - Time to test whether it works as intended
-         - Repeat nginx project compilation process
+         - Repeat the nginx project compilation process
            - cleanup first `make clean`
            - same as before `./configure --prefix="/opt/nginx-custom" --with-http_ssl_module --add-module="/path/to/custom/module"`, no errors again, expected (config did not change) but good
            - `make`, this time it seems everything is intact
                - `... copmilation flags ... -I src/core -I src/event -I src/event/modules ... more ... -o objs/addon/ngx_http_x_cache_key_filter_module/ngx_http_x_cache_key_filter_module.o /path/to/custom/module`
-         - Create `nginx.conf` file in [repo](https://github.com/adamhoof/CDN77-NGINX/blob/master/test/nginx.conf). Descriptions of directives is there as well.
+         - Create `nginx.conf` file [repo link](https://github.com/adamhoof/CDN77-NGINX/blob/master/test/nginx.conf). Descriptions of directives are there as well.
            - Basic conf taken from [beginner's guide](https://nginx.org/en/docs/beginners_guide.html#proxy).
            - Advanced proxy conf in this [article](https://betterstack.com/community/questions/how-to-setup-nginx-as-caching-reverse-proxy/).
            - Looked up what the directives mean in [ngx_http_proxy_module docs](https://nginx.org/en/docs/http/ngx_http_proxy_module.html). 
@@ -225,13 +225,45 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
          - Run nginx with our nginx.conf file
            - `sudo ./objs/nginx -c /path/to/nginx.conf`
            - `ps -A | grep nginx` confirms nginx is running
+         - Make a test request to see if proxy works at all
+           - `curl -k -I https://localhost:8443/`, this should produce an OK response and a cache MISS
+             - `-k` aka `--insecure` to allow self signed certs to work 
+             - `-I` aka `--head` to list headers, this is where our cache key should appear
+             - The output looks good, but there is no X-Cache-Key, something is wrong: 
+               - `HTTP/1.1 200 OK
+                 Server: nginx/1.26.3
+                 Date, Content Type, ....`
+           - Make another test request to see if our cache works at all
+             - `curl -k -I https://localhost:8443/`, this should produce an OK response and a cache HIT
+             - The cache seems to have been involved telling by the speed of response, but there is no information in the output about it.
+             - Where to check? LOGS. There seem to be 2 main log outputs, [access and error](https://docs.nginx.com/nginx/admin-guide/monitoring/logging/).
+               - **access log** tells us little by default, but there is a way to format it as the guide says, [updated nginx.conf commit](https://github.com/adamhoof/CDN77-NGINX/commit/1785825860f882df2cce2cb6b26d404e182de7d9).
+                 - Before -> `127.0.0.1 - - [22/Apr/2025:08:07:17 +0200] "HEAD / HTTP/1.1" 200 0 "-" "curl/8.9.1"`
+                 - After -> `127.0.0.1 [22/Apr/2025:08:20:15 +0200] "HEAD / HTTP/1.1" 200"curl/8.9.1"cache_status=HIT`. NICE!
+               - **error log** tells us quite a bit, here is where our custom module should log go as well.
+                 - We know that cache works just fine from the access log, so there must be a problem with our custom module.
+                 - Let's filter the error log to see our log messages -> `cat /opt/nginx-custom/logs/error.log | grep "XCKF"`
+                   - Issue: Hmmm, empty. So the module probably did not load at all or there is some other issue.
+                   - Fix1: Turns out to see debug, we need to compile with the option `--with-debug`, I am not surprised :D
+                   - Fix2: It is interesting that debug message inside `ngx_http_x_cache_key_filter_init` doesn't get logged when called using `ngx_log_debug0(NGX_LOG_DEBUG_HTTP,...)`, even though for the `ngx_http_x_cache_key_header_filter` function, it works just fine. Changing the call to `ngx_error_log(NGX_LOG_NOTICE...)` logs it.
+                     - Logs after, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/9277828e74f99bd6ed3ee0ec8f9f9e921ebee66b)
+                       - `... XCKF: ngx_http_x_cache_key_filter initialized ...`
+                       - `... XCKF: Filter called ...`
+                       - `... XCKF: Next filter returned 0 ...`
+                       - `... XCKF: Cache context found...`
+                       - `... XCKF: added header: X-Cache-Key: 6d2ba80804d06a98535b676be52d205f ...`
+           - Issue: So we checked logs and our module definitely thinks that the header is added. Why is it not?
+             - Let's check the example [ngx_http_userid_filter_module](https://github.com/nginx/nginx/blob/020b1db7eb187d4a9a5f1d6154c664a463473b36/src/http/modules/ngx_http_userid_filter_module.c) and the [Response -> Header filters](https://nginx.org/en/docs/dev/development_guide.html#http_response)
+           - Fix, [commit](https://github.com/adamhoof/CDN77-NGINX/commit/24678734bddba5dfeac30cb201ae3d8a4560bcd9): OH NOOO it looks like we should not be calling the `ngx_http_next_header_filter` first, but **last** or when we can not continue further, we return it!
+             - Why? If we called it first, all the other filters (including the ones that format the response, write headers etc., and much more, the final ones) run BEFORE our header is written. 
+             - This is precisely why we want `HTTP_AUX_FILTER` and not just `HTTP_FILTER`, because the `HTTP_AUX_FILTER` makes sure that our filter runs before the final filters, which would prevent us from ie. modifying the header.
 
 
 ## 3) - DNS wildcard algorithm
 
 ## Approximate time requirements:
 **Research** (topics, terms): 4h <br>
-**1) - NGINX cache lookup key analysis**: 8h <br>
-**2) - NGINX X-Cache-Key header addition**: 10h <br>
+**1) - NGINX cache lookup key analysis**: 10h <br>
+**2) - NGINX X-Cache-Key header addition**: 15h <br>
 **3) - DNS wildcard algorithm**<br>
 **Documentation** (thought process and ideas capture): 10h <br>
