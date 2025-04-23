@@ -11,6 +11,7 @@
 
 NGINX -> high performance, opensource software which can function as a web server, reverse proxy with load balancer, cache etc. -> CONFIGURABLE. Can handle heavy load, event driven arch. <br>
 Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides client IP vs acts on behalf of the server, eg. reverse proxy with load balancing, caching etc. <br>
+DNS zone -> Part of internet's domain name system that one organization is responsible for managing => owns all the DNS records for the domains within that part. (ie. `example.com` DNS zone owns records like `www.example.com`, `ftp.example.com`...).
 #### Configuration
 - Defined in a nginx.conf
 - Scopes/Context: by default everything is in a "main" scope/context, where all general settings are configured. We put other scopes/contexts and directives/commands inside.
@@ -109,7 +110,7 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
           - NOTE: Everything is really just bytes in the end, but I think this illustrates the point better role-wise.
 
 ## 2) - NGINX X-Cache-Key header addition
-### Constraints consideration
+### Task specs and observations
 - The X-Cache-Key must be the calculated key from 1), Questions 1 + 2.
   - After we even figure out where to start, this should not be super hard - we already know where and how it is calculated, can borrow the function if needed. 
 - The header must be sent to the client (in a response to the previous request), not to the origin. Lil confusing, a lot of questions. 
@@ -294,15 +295,30 @@ Forward vs Reverse proxy -> acts on behalf of the client, eg. VPN that hides cli
       - `... XCKF: Filter called;`
       - `... XCKF: Cache context found`
       - `... XCKF: added header: X-Cache-Key: 6d2ba80804d06a98535b676be52d205f`
-    - In terminal where request was made, we should see a response and appended X-Cache-Key header
+    - In terminal where request was made, we should see a response header including the appended X-Cache-Key
       - `HTTP/1.1 200 OK
         Server: nginx/1.26.3
         Date, Content Type, ....
         X-Cache-Key: 6d2ba80804d06a98535b676be52d205f`
-
-
-
 ## 3) - DNS wildcard algorithm
+### Task specs and observations
+- The goal of this task is to describe how DNS wildcard algorithm works (Nginx implementation).
+  - The purpose of this algorithm is to provide DNS responses for domain names that do not explicitly exist, so like a default, fallback mechanism for a range of potential hostnames.
+  - Important rules
+    - Wildcard position -> * label must be the leftmost label in the wildcard, that means ONLY `*.y.z`, no `x.*.z`, `x.y.*`,...
+    - Scope -> * MUST substitute one or more labels, that means `*.example.com` is ok for both `x.example.com`, `x.y.example.com` and so on, but not `example.com`.
+    - DNS zone non-existence -> Wildcard DNS record can only be matched if the requested domain name DOES NOT exist in a DNS zone. (eg. DNS zone `example.com`, holds `ftp.example.com`, request comes in for `ftp.example.com` => can't be applied, explicit records **always take precedence**)
+  - Example (all rules passed)
+    - So we have a wildcard pattern, ie. `*.match.com`
+    - Requests come in for www.match.com and www.miss.com.
+    - The algorithm needs to figure out whether the request matches any wildcard pattern, in our case `*.match.com`.
+    - www.match.com matches, but www.miss.com doesn't.
+  - Hint points us to [ngx_http_referer_module](https://nginx.org/en/docs/http/ngx_http_referer_module.html), where the algorithm is fully implemented.
+  - The algorithm must have time complexity O(1), which I assume the implementation in Nginx will definitely have. Will validate after the analysis.
+  - If I had to pick a data structure to implement the algo with, it would probably be some flavor of Trie. 
+### Code exploration
+- Found [ngx_http_referer_module.c](https://github.com/nginx/nginx/blob/master/src/http/modules/ngx_http_referer_module.c), the task hint helped with this.
+- 
 
 ## Approximate time requirements:
 **Research** (topics, terms): 4h <br>
