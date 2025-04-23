@@ -273,7 +273,7 @@ DNS zone -> Part of internet's domain name system that one organization is respo
       - Fix1: Created dirs inside the container.
     - Issue2: Permission issues, avoid root user.
       - Fix2: Create a user with suitable permissions.
-    - Issue3: Logging was not visible (logged into the logs directory)
+    - Issue3: Logging was not visible when checking docker logs (logged into the error and access log files inside logs dir)
       - Fix3: Redirect error log into `/dev/stderr`, access log into `/dev/stdout`, [edited nginx.conf](https://github.com/adamhoof/CDN77-NGINX/commit/eebbdb3ca96d3a036f83732df73d50bc113ae898)
     - Issue4: Logging too verbose to be useful for testing our module
       - Fix4: Filter out only our logs with simple grep filter `docker logs -f nginx-test 2>&1 | grep "XCKF"`
@@ -302,27 +302,57 @@ DNS zone -> Part of internet's domain name system that one organization is respo
         X-Cache-Key: 6d2ba80804d06a98535b676be52d205f`
 ## 3) - DNS wildcard algorithm
 ### Task specs and observations
-- The goal of this task is to describe how DNS wildcard algorithm works (Nginx implementation).
-  - The purpose of this algorithm is to provide DNS responses for domain names that do not explicitly exist, so like a default, fallback mechanism for a range of potential hostnames.
-  - Important rules
+- The purpose of this algorithm is to provide DNS responses for domain names that do not explicitly exist, so like a default, fallback mechanism for a range of potential hostnames.
+  - Important rules ([wikipedia](https://en.wikipedia.org/wiki/Wildcard_DNS_record))
     - Wildcard position -> * label must be the leftmost label in the wildcard, that means ONLY `*.y.z`, no `x.*.z`, `x.y.*`,...
     - Scope -> * MUST substitute one or more labels, that means `*.example.com` is ok for both `x.example.com`, `x.y.example.com` and so on, but not `example.com`.
     - DNS zone non-existence -> Wildcard DNS record can only be matched if the requested domain name DOES NOT exist in a DNS zone. (eg. DNS zone `example.com`, holds `ftp.example.com`, request comes in for `ftp.example.com` => can't be applied, explicit records **always take precedence**)
-  - Example (all rules passed)
-    - So we have a wildcard pattern, ie. `*.match.com`
-    - Requests come in for www.match.com and www.miss.com.
-    - The algorithm needs to figure out whether the request matches any wildcard pattern, in our case `*.match.com`.
-    - www.match.com matches, but www.miss.com doesn't.
-  - Hint points us to [ngx_http_referer_module](https://nginx.org/en/docs/http/ngx_http_referer_module.html), where the algorithm is fully implemented.
+- Example (all rules passed)
+  - So we have a wildcard pattern, ie. `*.match.com`
+  - Requests come in for www.match.com and www.miss.com.
+  - The algorithm needs to figure out whether the request matches any wildcard pattern, in our case `*.match.com`.
+  - www.match.com matches, but www.miss.com doesn't.
+- Hint points us to [ngx_http_referer_module](https://nginx.org/en/docs/http/ngx_http_referer_module.html), where the algorithm is fully implemented.
   - The algorithm must have time complexity O(1), which I assume the implementation in Nginx will definitely have. Will validate after the analysis.
   - If I had to pick a data structure to implement the algo with, it would probably be some flavor of Trie. 
 ### Code exploration
 - Found [ngx_http_referer_module.c](https://github.com/nginx/nginx/blob/master/src/http/modules/ngx_http_referer_module.c), the task hint helped with this.
-- 
+  - What is a "referer"?
+    - An HTTP request header responsible for including the URL of a webpage from which the current request originated.
+  - Why referer then, what does it have in common with DNS wildcard record matching?
+    - Looking into the [nxg_http_referer_module docs](https://nginx.org/en/docs/http/ngx_http_referer_module.html), now it starts to make sense, we are setting `valid_referers` which are in the form of DNS wildcard records!
+    - ie. `valid_referers ...` `... *.example.com` `example.* ...` -> Ok so this specific implementation is using **both leftmost and rightmost** wildcards apparently, good to know.
+- Found [valid_referers](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L472). from future --> It's purpose is to parse out provided values, validate and place them into their corresponding arrays. <-- from future
+- Calls [ngx_hash_keys_array_init](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L683)
+  - Hmmm, it looks like it is initializing 3 arrays? `&ha->keys`, `&ha->dns_wc_head`, `&ha->dns_wc_tail`
+    - It seems like those are for exact match, prefix (head) wildcard and postfix (tail) wildcard match, ugh, why?
+  - They seem temporary for some reason `... = ngx_pcalloc(ha->temp_pool...)` 
+    - from future --> since `valid_referers` directive is valid both in server{} and location{} scopes, it is easier to collect the key strings into temporary arrays first and then merge them into the final structures, just as the `ngx_http_referer_merge_conf` does by calling `ngx_hash_wildcard_init` and `ngx_hash_init`<-- from future
+- Right under this function is [ngx_hash_add_key](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L738).
+  - Ahhh this function is actually a pretty good find -> Contains logic for categorizing the key string as either exact match, prefix or suffix wildcard and checks for conflicts.
+  - **This file might contain other logic for DNS wildcard matching too.**
+- Found [ngx_hash_find](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L13)
+  - This looks for the exact match, NICE!
+  - Hmmm that must mean there are separate functions for finding the prefix and suffix wildcards.
+- Yes, right under it [ngx_hash_find_wc_head](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L53) and [ngx_hash_find_wc_tail](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L147)
+- And here is the function [ngx_hash_find_combined](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L211) that aggregates all of them all, lesgooo!
+  1. It first tries to find the exact match (remember the rules, explicit records **always take precedence**) -> `value = ngx_hash_find(&hash->hash, key, name, len);`
+  2. Then it checks the prefix wildcard match `value = ngx_hash_find_wc_head(hash->wc_head, name, len);`
+  3. And lastly the postfix wildcard match `value = ngx_hash_find_wc_tail(hash->wc_tail, name, len);`
+  4. Returns the value if found, NULL if not.
+- `ngx_hash_find_combined` leads us back to [ngx_http_referer_variable](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L115C1-L115C26) which calls it. It's purpose is to determine if the request's referer header is considered valid according to the `valid_referers`.
+- Ok things are getting clearer, now let's just find what data structures are being used to confirm the time complexity for lookups is indeed O(1).
+### How does the algorithm work? 
+- For that we will analyze these functions:
+  - `ngx_hash_init` -> Builds a standard hash table used for exact matches => lookup O(1)
+  - `ngx_hash_find` -> 
+  - `ngx_hash_wildcard_init` -> Builds specialized, potentially nested hash structures (`ngx_hash_wildcard_t`) for wildcard matches => lookup ?
+  - `ngx_hash_find_wc_head / ngx_hash_find_wc_tail` -> 
+
 
 ## Approximate time requirements:
-**Research** (topics, terms): 4h <br>
+**Research** (topics, terms): 3h <br>
 **1) - NGINX cache lookup key analysis**: 10h <br>
 **2) - NGINX X-Cache-Key header addition**: 15h <br>
 **3) - DNS wildcard algorithm**<br>
-**Documentation** (thought process and ideas capture): 10h <br>
+**Documentation** (thought process and ideas capture): 13h <br>
