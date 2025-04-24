@@ -346,7 +346,7 @@ DNS zone -> Part of internet's domain name system that one organization is respo
 ### Lookup time complexity analysis 
 - To get the final time complexity, we need to examine all the data structures used for lookup
   - `ngx_hash_init` -> Builds a hash table (`ngx_hash_t`) used for exact matches => well-known data structure, lookup O(1)
-  - `ngx_hash_wildcard_init` -> [Recursively](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L603) builds some alien-looking things for wildcard matches (separately for [prefix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L421) and [postfix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L441C13-L441C35)) => must investigate further, what are they?
+  - `ngx_hash_wildcard_init` -> [Recursively](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L603) builds some alien-looking things (separately for [prefix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L421) and [postfix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L441C13-L441C35)) => must investigate further, what are they?
     - Function parameters
       - `*hinit` -> [structure](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.h#L62) containing parameters for building hash tables (pool, max size, bucket size, hash function), crazy stuff!
       - `*names` -> [sorted](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L413) array of [ngx_hash_key_t](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.h#L39)
@@ -365,12 +365,28 @@ DNS zone -> Part of internet's domain name system that one organization is respo
          - Recursively calls `ngx_hash_wildcard_init` on the `next_names`, this will process the remaining labels for this current recursive level label.
          - Next is a call to `wdc = (ngx_hash_wildcard_t *) h.hash;` What, that is empty no?
       3. Following the recursive chain back (single iteration of b. Main loop):
-         - OHHHH I see, hash.h is not empty - the recursive call chain stops when it hits the end of ie. `example.com`, therefore `if (next_names.nelts)` is false, there are no [other labels](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L598) to process => a [call](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L623C5-L624C40) to `if (ngx_hash_init(hinit, (ngx_hash_key_t *) curr_names.elts, curr_names.nelts)` is made on it's `curr_names`, creates a hash.
+         - OHHHH I see, `hash.h` is not empty - the recursive call chain stops when it hits the end of ie. `example.com`, therefore `if (next_names.nelts)` is false, there are no [other labels](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L598) to process => a [call](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L623C5-L624C40) to `if (ngx_hash_init(hinit, (ngx_hash_key_t *) curr_names.elts, curr_names.nelts)` is made on it's `curr_names`, creates a hash.
          - So we go back to level 2, the execution of `ngx_hash_wildcard_init` finished, and now the `wdc = (ngx_hash_wildcard_t *) h.hash;` hash is retrieved, which IS POPULATED thanks to level 3. 
-         - Wdc pointer is stored to `name->value`, and looks like it is also encoding some flags `name->value = (void *) ((uintptr_t) wdc | (dot ? 3 : 2));`.
+         - Wdc pointer is stored to `name->value`, and looks like it is also encoding some flags `name->value = (void *) ((uintptr_t) wdc | (dot ? 3 : 2));`. The `| (dot ...)` looks like some flag setting, why? 
+           - from future --> [the flags indicate](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L91): 00 final value allowing both exact and wildcard, 01 final value allowing wildcard only, 10 a pointer to sub-hash allows both exact and wildcard match, 11 a pointer to sub-hash allowing only wildcard <-- from future
          - It goes similarly for level 1, this is how the linking of hashes happens.
          - After the level 1 finishes, it again calls `ngx_hash_init`, this is a final call and it constructs the actual `ngx_hash_t` hash table which is used for lookups, whose values are now the encoded pointers to intermediary hash structures.
-      4. This means that Nginx implementation relies on hash table, which is built recursively for each domain level, enables fast lookups with O(1) time complexity. 
+      4. This means that Nginx implementation relies on "tree of hash tables", which is built recursively for each domain level, enables fast lookups with O(1) time complexity. 
+    - The lookup then looks like this (ie. for `yeet.example.com`):
+       - Extracts the last label -> `com`
+       - Calculates hash for `com`.
+       - Calls `ngx_hash_find` using the hash of `com` on the top-level hash table.
+       - Retrieves the `name->value` pointer. Checks flags, which indicate whether it is a pointer to a sub-hash or final data pointer.
+       - Extracts the pointer to the next hash structure by masking off the flags (the flags are impostors). That would point to the `example` level.
+       - Repeat the process for each remaining label (`example` and `yeet`). 
+         - If the `ngx_hash_find` succeeds, check flags
+           - Bit 1 set, pointer to sub-hash -> either 10 or 11 but there are no more labels in the request name (`yeet.example.com`) to process => no exact match was found => return default value stored for this specific level (wildcard time).
+           - Bit 1 clear, final value pointer -> either 00 or 01, we check Bit 0
+             - The lookup was for the exact domain and allowing wildcards only (flag 01) => no match
+             - The lookup was for subdomain or we allow exact matches as well as wildcards (flag 00) => mask off the flags and return final data pointer. 
+         - If the `ngx_hash_find` fails
+           - Function returns the default value stored for this specific level (wildcard time).
+    - **Since all the hash calculations and lookups are O(1) with respect to the number of rules, the final time complexity is O(1).**
 
 
 ## Approximate time requirements:
