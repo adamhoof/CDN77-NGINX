@@ -346,24 +346,36 @@ DNS zone -> Part of internet's domain name system that one organization is respo
 ### Lookup time complexity analysis 
 - To get the final time complexity, we need to examine all the data structures used for lookup
   - `ngx_hash_init` -> Builds a hash table (`ngx_hash_t`) used for exact matches => well-known data structure, lookup O(1)
-  - `ngx_hash_wildcard_init` -> [Recursively](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L603) builds specialized, potentially nested hash structures ([ngx_hash_wildcard_t](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.h#L32)) for wildcard matches (separately for [prefix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L421) and [postfix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L441C13-L441C35)) => must investigate further, what are they?
+  - `ngx_hash_wildcard_init` -> [Recursively](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L603) builds some alien-looking things for wildcard matches (separately for [prefix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L421) and [postfix](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L441C13-L441C35)) => must investigate further, what are they?
     - Function parameters
       - `*hinit` -> [structure](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.h#L62) containing parameters for building hash tables (pool, max size, bucket size, hash function), crazy stuff!
       - `*names` -> [sorted](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/http/modules/ngx_http_referer_module.c#L413) array of [ngx_hash_key_t](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.h#L39)
       -  `nelts` -> number of elems in `names` array
     - How does it work?
-      1. Initialize [temporary](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L500C37-L500C52) arrays for `curr_names` and `next_names`. from future --> `curr_names` are first label of each group being processed at the current recursion level (ie. com, net,...) and `next_names` hold the next part of the keys for that specific group (ie. `example.`, `google.` for `com` group). Remember, it is called recursively. 
-      2. [Iterate through](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L514) all elements in the array.
-         - Identifies and processes a first group based on the [first label](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L523) ` if (names[n].key.data[len] == '.') ...` (so for `example.com` it takes `com`)
+      1. Initialize [temporary](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L500C37-L500C52) arrays for `curr_names` and `next_names`. 
+      2. [Main loop: iterate through](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L514) all elements in `names`.
+         - Identifies the first group of the current recursion level based on the [first label](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L523) ` if (names[n].key.data[len] == '.') ...` (so for `yeet.example.com` it takes `com`, next iteration, it takes `example` -> **current recursion level**)
          - [Store](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L530) `name = ngx_array_push(&curr_names);` the found group and the corresponding [info](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L535) `name->key.len = len; name->key.data = names[n].key.data; ...`).
-         - [Check](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L553) if there are more parts `if (names[n].key.len != len) ... ` after the current label and if yes [store](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L554) it into the `next_names`, setting the corresponding [info](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L559) like before `next_name->key.len = names[n].key.len - len; ... `
-         - [Iterate through](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L570) the array, check
-         - 
+         - [Check](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L553) if there are more parts `if (names[n].key.len != len) ... ` in this group and if yes [store](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L554) it into the `next_names`, setting the corresponding [info](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L559) like before `next_name->key.len = names[n].key.len - len; ... `
+         - [Iterate through](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L570) the array `for (i = n + 1; i < nelts; i++) ... ` to check whether there are other keys that belong to the same group to avoid duplicating groups.
+           - If there are any, [collect](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L582C13-L582C22) them into `next_names`, the same mechanism as before. (so for `com` group it collected `example`, `google`)
+         - Now the [recursive part](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L603) comes in. Let's recap what we already collected in a single iteration of the `b. Main loop` until this point:
+           - A top-level group name for the current recursion level, ie. `com` put inside `curr_names`
+           - All the other labels belonging to the group, like `example` and `google` inside `next_names`
+         - Recursively calls `ngx_hash_wildcard_init` on the `next_names`, this will process the remaining labels for this current recursive level label.
+         - Next is a call to `wdc = (ngx_hash_wildcard_t *) h.hash;` What, that is empty no?
+      3. Following the recursive chain back (single iteration of b. Main loop):
+         - OHHHH I see, hash.h is not empty - the recursive call chain stops when it hits the end of ie. `example.com`, therefore `if (next_names.nelts)` is false, there are no [other labels](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L598) to process => a [call](https://github.com/nginx/nginx/blob/9785db9bd504ff25c1d84857505e6546fc04ae68/src/core/ngx_hash.c#L623C5-L624C40) to `if (ngx_hash_init(hinit, (ngx_hash_key_t *) curr_names.elts, curr_names.nelts)` is made on it's `curr_names`, creates a hash.
+         - So we go back to level 2, the execution of `ngx_hash_wildcard_init` finished, and now the `wdc = (ngx_hash_wildcard_t *) h.hash;` hash is retrieved, which IS POPULATED thanks to level 3. 
+         - Wdc pointer is stored to `name->value`, and looks like it is also encoding some flags `name->value = (void *) ((uintptr_t) wdc | (dot ? 3 : 2));`.
+         - It goes similarly for level 1, this is how the linking of hashes happens.
+         - After the level 1 finishes, it again calls `ngx_hash_init`, this is a final call and it constructs the actual `ngx_hash_t` hash table which is used for lookups, whose values are now the encoded pointers to intermediary hash structures.
+      4. This means that Nginx implementation relies on hash table, which is built recursively for each domain level, enables fast lookups with O(1) time complexity. 
 
 
 ## Approximate time requirements:
 **Research** (topics, terms): 3h <br>
-**1) - NGINX cache lookup key analysis**: 10h <br>
+**1) - NGINX cache lookup key analysis**: 11h <br>
 **2) - NGINX X-Cache-Key header addition**: 15h <br>
-**3) - DNS wildcard algorithm:** 7h <br>
+**3) - DNS wildcard algorithm:** 9h <br>
 **Documentation** (thought process and ideas capture): 13h <br>
